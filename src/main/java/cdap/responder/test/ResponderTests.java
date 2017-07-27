@@ -27,6 +27,7 @@ import co.cask.cdap.api.dataset.lib.KeyValueTable;
 import co.cask.cdap.api.metrics.Metrics;
 import co.cask.cdap.api.service.AbstractService;
 import co.cask.cdap.api.service.http.AbstractHttpServiceHandler;
+import co.cask.cdap.api.service.http.HttpServiceContext;
 import co.cask.cdap.api.service.http.HttpServiceRequest;
 import co.cask.cdap.api.service.http.HttpServiceResponder;
 import com.google.common.base.Charsets;
@@ -36,6 +37,7 @@ import javax.ws.rs.GET;
 import javax.ws.rs.POST;
 import javax.ws.rs.Path;
 import javax.ws.rs.PathParam;
+import java.util.Arrays;
 
 /**
  * This is a simple ResponderTests example that uses one stream, one dataset, one flow and one service.
@@ -130,6 +132,37 @@ public class ResponderTests extends AbstractApplication {
 			delay();
 		}
 
+		@Path("add/threadeddelay/{key}/{value}")
+		@POST
+		public void addThreadedDelay(HttpServiceRequest request, HttpServiceResponder responder, @PathParam("key") String key, @PathParam("value") String value) {
+			whom.write(key,value);
+
+			responder.sendStatus(201);
+
+
+			new Thread(){
+				public void run(){
+					delay();
+				}
+			}.start();
+
+		}
+
+		@GET
+		@Path("get/threaded/{key}")
+		@TransactionPolicy(TransactionControl.EXPLICIT)
+		public void threaded(HttpServiceRequest request,HttpServiceResponder responder,final @PathParam("key")String key){
+			final String[] response = new String[1];
+			final HttpServiceContext context = getContext();
+			threadedLookup lookup = new threadedLookup(getContext(),response,key);
+			Thread t = new Thread(lookup);
+			t.start();
+
+			while(t.isAlive());
+
+			responder.sendString(response[0]);
+		}
+
 		void delay(){
 			for(int i =0;i<100;i++)
 				for(int k =0;k<10000000;k++){
@@ -138,6 +171,35 @@ public class ResponderTests extends AbstractApplication {
 					String s = j+" ";
 					s.trim();
 				}
+		}
+
+		public class threadedLookup implements Runnable{
+			HttpServiceContext context;
+			String[] response;
+			volatile String key;
+
+			public threadedLookup(HttpServiceContext context,String[] response,String key) {
+				this.context = context;
+				this.response = response;
+				this.key = key;
+			}
+
+
+			@Override
+			public void run() {
+				whom = context.getDataset("whom");
+				try {
+					context.execute(new TxRunnable() {
+						@Override
+						public void run(DatasetContext context) throws Exception {
+							response[0] = new String(whom.read(key));
+						}
+					});
+				} catch (TransactionFailureException e) {
+					e.printStackTrace();
+				}
+				Thread.currentThread().interrupt();
+			}
 		}
 	}
 }
